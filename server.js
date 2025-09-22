@@ -6,7 +6,7 @@ const fs = require('fs').promises;
 const path = require('path');
 
 const app = express();
-const port = process.env.PORT || 3001;
+const port = parseInt(process.env.PORT) || 3001;
 
 // Middleware
 app.use(cors());
