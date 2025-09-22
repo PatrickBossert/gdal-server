@@ -107,48 +107,47 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
 
 // GDAL processing functions
 async function getFileInfo(filePath) {
-  const dataset = await gdal.openAsync(filePath);
+  const result = await gdal.openAsync(filePath);
   
-  // Check the correct structure: datasets[0].layers
+  // Check the correct structure in the async result
   let layerCount = 0;
-  if (dataset.datasets && dataset.datasets.length > 0) {
-    const firstDataset = dataset.datasets[0];
+  if (result.datasets && result.datasets.length > 0) {
+    const firstDataset = result.datasets[0];
     if (firstDataset.layers && Array.isArray(firstDataset.layers)) {
       layerCount = firstDataset.layers.length;
     }
   }
   
   const info = {
-    driver: dataset.driver?.description || 'Unknown',
+    driver: result.driver?.description || 'Unknown',
     size: {
-      width: dataset.rasterSize?.x || 0,
-      height: dataset.rasterSize?.y || 0
+      width: result.rasterSize?.x || 0,
+      height: result.rasterSize?.y || 0
     },
     layers: layerCount,
-    projection: dataset.srs?.toWKT() || 'Unknown',
+    projection: result.srs?.toWKT() || 'Unknown',
     extent: null
   };
 
-  dataset.close();
   return info;
 }
 
 // Enhanced function to get detailed metadata
 async function getDetailedInfo(gdalPath) {
-  let dataset;
   try {
     console.log(`Opening dataset: ${gdalPath}`);
-    dataset = await gdal.openAsync(gdalPath);
+    const result = await gdal.openAsync(gdalPath);
     
-    console.log('Dataset structure check:', {
-      hasDatasets: !!dataset.datasets,
-      datasetsLength: dataset.datasets?.length || 0,
-      driver: dataset.driver?.description
+    console.log('Full result structure:', Object.keys(result));
+    console.log('Result datasets check:', {
+      hasDatasets: !!result.datasets,
+      datasetsLength: result.datasets?.length || 0,
+      hasDriver: !!result.driver
     });
 
     const info = {
       file_info: {
-        driver: dataset.driver?.description || 'Unknown',
+        driver: result.driver?.description || 'Unknown',
         file_path: gdalPath,
         layer_count: 0,
         type: 'vector'
@@ -156,15 +155,16 @@ async function getDetailedInfo(gdalPath) {
       layers: []
     };
 
-    // Use the correct structure: datasets[0].layers
-    if (dataset.datasets && dataset.datasets.length > 0) {
-      const firstDataset = dataset.datasets[0];
+    // Use the correct structure from the async result
+    if (result.datasets && result.datasets.length > 0) {
+      const firstDataset = result.datasets[0];
+      console.log('First dataset structure:', Object.keys(firstDataset));
       
       if (firstDataset.layers && Array.isArray(firstDataset.layers)) {
         const layers = firstDataset.layers;
         info.file_info.layer_count = layers.length;
         
-        console.log(`Found ${layers.length} layers in datasets[0].layers`);
+        console.log(`Found ${layers.length} layers in result.datasets[0].layers`);
 
         // Process each layer
         for (let i = 0; i < layers.length; i++) {
@@ -240,24 +240,19 @@ async function getDetailedInfo(gdalPath) {
           }
         }
       } else {
-        console.log('datasets[0].layers not found or not an array');
+        console.log('result.datasets[0].layers not found or not an array');
+        console.log('First dataset keys:', Object.keys(firstDataset));
       }
     } else {
-      console.log('No datasets array found');
+      console.log('No datasets array found in result');
+      console.log('Available result keys:', Object.keys(result));
     }
 
-    dataset.close();
+    // Don't close dataset since it's just a result object, not a dataset handle
     console.log(`Successfully processed ${info.layers.length} layers`);
     return info;
     
   } catch (error) {
-    if (dataset) {
-      try {
-        dataset.close();
-      } catch (closeError) {
-        console.error('Error closing dataset:', closeError.message);
-      }
-    }
     console.error('Detailed info error:', error);
     throw new Error(`Failed to get detailed info: ${error.message}`);
   }
@@ -266,14 +261,14 @@ async function getDetailedInfo(gdalPath) {
 // Function to list all layers
 async function listAllLayers(gdalPath) {
   try {
-    const dataset = await gdal.openAsync(gdalPath);
+    const result = await gdal.openAsync(gdalPath);
     
     let layerCount = 0;
     const allLayers = [];
     
-    // Use the correct structure: datasets[0].layers
-    if (dataset.datasets && dataset.datasets.length > 0) {
-      const firstDataset = dataset.datasets[0];
+    // Use the correct structure from async result
+    if (result.datasets && result.datasets.length > 0) {
+      const firstDataset = result.datasets[0];
       
       if (firstDataset.layers && Array.isArray(firstDataset.layers)) {
         const layers = firstDataset.layers;
@@ -298,17 +293,16 @@ async function listAllLayers(gdalPath) {
       }
     }
     
-    const result = {
+    const resultInfo = {
       file_info: {
-        driver: dataset.driver?.description || 'Unknown',
+        driver: result.driver?.description || 'Unknown',
         layer_count: layerCount,
         file_path: gdalPath
       },
       layers: allLayers
     };
 
-    dataset.close();
-    return result;
+    return resultInfo;
     
   } catch (error) {
     throw new Error(`Failed to list layers: ${error.message}`);
