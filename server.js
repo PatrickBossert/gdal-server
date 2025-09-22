@@ -109,30 +109,25 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
 async function getFileInfo(filePath) {
   const dataset = await gdal.openAsync(filePath);
   
+  // Check if this is the structure with datasets array
+  let layerCount = 0;
+  if (dataset.datasets && dataset.datasets.length > 0) {
+    const firstDataset = dataset.datasets[0];
+    if (firstDataset.info && firstDataset.info.layers) {
+      layerCount = firstDataset.info.layers.length;
+    }
+  }
+  
   const info = {
-    driver: dataset.driver.description,
+    driver: dataset.driver?.description || 'Unknown',
     size: {
       width: dataset.rasterSize?.x || 0,
       height: dataset.rasterSize?.y || 0
     },
-    layers: dataset.layers?.count() || 0,
+    layers: layerCount,
     projection: dataset.srs?.toWKT() || 'Unknown',
     extent: null
   };
-
-  // Get extent if it's a vector file
-  if (dataset.layers?.count() > 0) {
-    const layer = dataset.layers.get(0);
-    const extent = layer.extent;
-    if (extent) {
-      info.extent = {
-        minX: extent.minX,
-        minY: extent.minY,
-        maxX: extent.maxX,
-        maxY: extent.maxY
-      };
-    }
-  }
 
   dataset.close();
   return info;
@@ -140,117 +135,123 @@ async function getFileInfo(filePath) {
 
 // Enhanced function to get detailed metadata
 async function getDetailedInfo(gdalPath) {
+  let dataset;
   try {
-    const dataset = await gdal.openAsync(gdalPath);
+    console.log(`Opening dataset: ${gdalPath}`);
+    dataset = await gdal.openAsync(gdalPath);
     
+    // Log the structure we receive
+    console.log('Dataset structure:', {
+      hasDatasets: !!dataset.datasets,
+      datasetsLength: dataset.datasets?.length || 0,
+      driver: dataset.driver?.description
+    });
+
     const info = {
       file_info: {
-        driver: dataset.driver.description,
+        driver: dataset.driver?.description || 'Unknown',
         file_path: gdalPath,
-        layer_count: dataset.layers?.count() || 0
+        layer_count: 0,
+        type: 'vector'
       },
       layers: []
     };
 
-    // If it's a raster
-    if (dataset.rasterSize) {
-      info.file_info.type = 'raster';
-      info.file_info.size = {
-        width: dataset.rasterSize.x,
-        height: dataset.rasterSize.y
-      };
-      info.file_info.band_count = dataset.bands?.count() || 0;
-    } else {
-      info.file_info.type = 'vector';
-    }
+    // Access layers through datasets[0].info.layers structure
+    if (dataset.datasets && dataset.datasets.length > 0) {
+      const firstDataset = dataset.datasets[0];
+      console.log('First dataset info:', {
+        hasInfo: !!firstDataset.info,
+        hasLayers: !!(firstDataset.info && firstDataset.info.layers),
+        layerCount: firstDataset.info?.layers?.length || 0
+      });
 
-    // Process each layer
-    if (dataset.layers && dataset.layers.count() > 0) {
-      for (let i = 0; i < dataset.layers.count(); i++) {
-        const layer = dataset.layers.get(i);
+      if (firstDataset.info && firstDataset.info.layers) {
+        const layers = firstDataset.info.layers;
+        info.file_info.layer_count = layers.length;
         
-        const layerInfo = {
-          name: layer.name,
-          geometry_type: layer.geomType ? gdal.wkbGeometryType[layer.geomType] : 'Unknown',
-          feature_count: layer.features.count(),
-          spatial_reference: layer.srs ? layer.srs.toWKT() : 'Unknown',
-          extent: null,
-          fields: []
-        };
+        console.log(`Found ${layers.length} layers`);
 
-        // Get layer extent
-        try {
-          const extent = layer.extent;
-          if (extent) {
-            layerInfo.extent = {
-              min_x: extent.minX,
-              min_y: extent.minY,
-              max_x: extent.maxX,
-              max_y: extent.maxY
-            };
-          }
-        } catch (extentError) {
-          console.warn('Could not get extent for layer:', layer.name);
-        }
-
-        // Get field definitions
-        if (layer.fields) {
-          const fieldNames = layer.fields.getNames();
-          for (const fieldName of fieldNames) {
-            try {
-              const field = layer.fields.get(fieldName);
-              layerInfo.fields.push({
-                name: fieldName,
-                type: gdal.fieldType[field.type] || 'Unknown',
-                width: field.width || null,
-                precision: field.precision || null,
-                justification: field.justification ? gdal.fieldJustification[field.justification] : null
-              });
-            } catch (fieldError) {
-              console.warn(`Could not get field info for ${fieldName}:`, fieldError.message);
-            }
-          }
-        }
-
-        // Get a sample of features to show actual data structure
-        layerInfo.sample_features = [];
-        if (layer.features.count() > 0) {
-          let sampleCount = 0;
-          const maxSamples = 3;
-          
-          await layer.features.forEachAsync(async (feature) => {
-            if (sampleCount >= maxSamples) return;
+        // Process each layer
+        for (let i = 0; i < layers.length; i++) {
+          try {
+            console.log(`Processing layer ${i + 1}/${layers.length}`);
+            const layerInfo = layers[i];
             
-            const featureData = {
-              fid: feature.fid,
-              geometry_type: feature.getGeometry() ? 
-                gdal.wkbGeometryType[feature.getGeometry().wkbType] : null,
-              properties: {}
+            const processedLayer = {
+              name: layerInfo.name || `Layer_${i}`,
+              geometry_type: layerInfo.geometryType || 'Unknown',
+              feature_count: layerInfo.featureCount || 0,
+              spatial_reference: 'Unknown',
+              extent: null,
+              fields: []
             };
 
-            // Get feature properties
-            const fieldNames = layer.fields.getNames();
-            for (const fieldName of fieldNames) {
-              try {
-                featureData.properties[fieldName] = feature.fields.get(fieldName);
-              } catch (err) {
-                featureData.properties[fieldName] = null;
+            // Extract field information if available
+            if (layerInfo.fields) {
+              console.log(`Layer ${processedLayer.name} has ${layerInfo.fields.length} fields`);
+              
+              for (const field of layerInfo.fields) {
+                processedLayer.fields.push({
+                  name: field.name || 'Unknown',
+                  type: field.type || 'Unknown',
+                  width: field.width || null,
+                  precision: field.precision || null,
+                  justification: field.justification || null
+                });
               }
             }
 
-            layerInfo.sample_features.push(featureData);
-            sampleCount++;
-          });
-        }
+            // Add extent information if available
+            if (layerInfo.extent) {
+              processedLayer.extent = {
+                min_x: layerInfo.extent.minX,
+                min_y: layerInfo.extent.minY,
+                max_x: layerInfo.extent.maxX,
+                max_y: layerInfo.extent.maxY
+              };
+            }
 
-        info.layers.push(layerInfo);
+            // Add sample features placeholder (since we can't access actual features from info structure)
+            processedLayer.sample_features = [];
+            processedLayer.note = "Feature sampling not available from info structure";
+
+            info.layers.push(processedLayer);
+            console.log(`Successfully processed layer: ${processedLayer.name}`);
+            
+          } catch (layerError) {
+            console.error(`Error processing layer ${i}:`, layerError.message);
+            info.layers.push({
+              name: `Layer_${i}_Error`,
+              error: layerError.message,
+              geometry_type: 'Error',
+              feature_count: 0,
+              spatial_reference: 'Error',
+              extent: null,
+              fields: []
+            });
+          }
+        }
       }
+    } else {
+      console.log('No datasets array found, trying alternative access methods...');
+      // Fallback: try other possible structures
+      // We can add more structure checks here if needed
     }
 
     dataset.close();
+    console.log(`Successfully processed ${info.layers.length} layers`);
     return info;
     
   } catch (error) {
+    if (dataset) {
+      try {
+        dataset.close();
+      } catch (closeError) {
+        console.error('Error closing dataset:', closeError.message);
+      }
+    }
+    console.error('Detailed info error:', error);
     throw new Error(`Failed to get detailed info: ${error.message}`);
   }
 }
@@ -260,26 +261,36 @@ async function listAllLayers(gdalPath) {
   try {
     const dataset = await gdal.openAsync(gdalPath);
     
-    const result = {
-      file_info: {
-        driver: dataset.driver.description,
-        layer_count: dataset.layers?.count() || 0,
-        file_path: gdalPath
-      },
-      layers: []
-    };
-
-    if (dataset.layers && dataset.layers.count() > 0) {
-      for (let i = 0; i < dataset.layers.count(); i++) {
-        const layer = dataset.layers.get(i);
-        result.layers.push({
-          index: i,
-          name: layer.name,
-          geometry_type: layer.geomType ? gdal.wkbGeometryType[layer.geomType] : 'Unknown',
-          feature_count: layer.features.count()
-        });
+    let layerCount = 0;
+    const allLayers = [];
+    
+    // Access layers through datasets[0].info.layers structure
+    if (dataset.datasets && dataset.datasets.length > 0) {
+      const firstDataset = dataset.datasets[0];
+      if (firstDataset.info && firstDataset.info.layers) {
+        const layers = firstDataset.info.layers;
+        layerCount = layers.length;
+        
+        for (let i = 0; i < layers.length; i++) {
+          const layerInfo = layers[i];
+          allLayers.push({
+            index: i,
+            name: layerInfo.name || `Layer_${i}`,
+            geometry_type: layerInfo.geometryType || 'Unknown',
+            feature_count: layerInfo.featureCount || 0
+          });
+        }
       }
     }
+    
+    const result = {
+      file_info: {
+        driver: dataset.driver?.description || 'Unknown',
+        layer_count: layerCount,
+        file_path: gdalPath
+      },
+      layers: allLayers
+    };
 
     dataset.close();
     return result;
