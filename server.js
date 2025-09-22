@@ -138,12 +138,51 @@ async function getDetailedInfo(gdalPath) {
     console.log(`Opening dataset: ${gdalPath}`);
     const result = await gdal.openAsync(gdalPath);
     
-    console.log('Full result structure:', Object.keys(result));
-    console.log('Result datasets check:', {
-      hasDatasets: !!result.datasets,
-      datasetsLength: result.datasets?.length || 0,
-      hasDriver: !!result.driver
-    });
+    // Comprehensive logging of the result structure
+    console.log('=== GDAL OPEN RESULT ANALYSIS ===');
+    console.log('Type of result:', typeof result);
+    console.log('Result constructor:', result.constructor?.name);
+    console.log('All result keys:', Object.keys(result));
+    console.log('All result properties:', Object.getOwnPropertyNames(result));
+    
+    // Check for different possible structures
+    console.log('Direct properties check:');
+    console.log('- result.datasets:', !!result.datasets, Array.isArray(result.datasets), result.datasets?.length);
+    console.log('- result.layers:', !!result.layers, typeof result.layers);
+    console.log('- result.rootGroup:', !!result.rootGroup, typeof result.rootGroup);
+    console.log('- result.driver:', !!result.driver, result.driver?.description);
+    
+    // Try to access layers through different paths
+    if (result.layers) {
+      console.log('Direct layers found:', typeof result.layers);
+      if (typeof result.layers.count === 'function') {
+        console.log('Layers count method available:', result.layers.count());
+      }
+      if (typeof result.layers.get === 'function') {
+        console.log('Layers get method available');
+      }
+      if (Array.isArray(result.layers)) {
+        console.log('Layers is array with length:', result.layers.length);
+      }
+    }
+    
+    if (result.rootGroup) {
+      console.log('RootGroup found:', Object.keys(result.rootGroup));
+      if (result.rootGroup.layers) {
+        console.log('RootGroup.layers:', typeof result.rootGroup.layers);
+        if (result.rootGroup.layers.names) {
+          console.log('RootGroup.layers.names:', result.rootGroup.layers.names);
+        }
+      }
+    }
+    
+    // Log the first few properties of result to see what we're working with
+    for (const key of Object.keys(result).slice(0, 10)) {
+      const value = result[key];
+      console.log(`result.${key}:`, typeof value, Array.isArray(value) ? `Array(${value.length})` : value);
+    }
+    
+    console.log('=== END ANALYSIS ===');
 
     const info = {
       file_info: {
@@ -152,104 +191,86 @@ async function getDetailedInfo(gdalPath) {
         layer_count: 0,
         type: 'vector'
       },
-      layers: []
+      layers: [],
+      debug_info: {
+        result_type: typeof result,
+        result_keys: Object.keys(result),
+        has_datasets: !!result.datasets,
+        has_layers: !!result.layers,
+        has_rootGroup: !!result.rootGroup
+      }
     };
 
-    // Use the correct structure from the async result
+    // Try all possible ways to access layers
+    let layersFound = false;
+    
+    // Method 1: Direct datasets array
     if (result.datasets && result.datasets.length > 0) {
+      console.log('Trying method 1: result.datasets[0].layers');
       const firstDataset = result.datasets[0];
-      console.log('First dataset structure:', Object.keys(firstDataset));
+      console.log('First dataset keys:', Object.keys(firstDataset));
       
       if (firstDataset.layers && Array.isArray(firstDataset.layers)) {
-        const layers = firstDataset.layers;
-        info.file_info.layer_count = layers.length;
-        
-        console.log(`Found ${layers.length} layers in result.datasets[0].layers`);
-
-        // Process each layer
-        for (let i = 0; i < layers.length; i++) {
+        console.log('Found layers in datasets[0].layers');
+        info.layers = firstDataset.layers.map((layer, i) => ({
+          name: layer.name || `Layer_${i}`,
+          feature_count: layer.featureCount || 0,
+          raw_data: layer
+        }));
+        info.file_info.layer_count = info.layers.length;
+        layersFound = true;
+      }
+    }
+    
+    // Method 2: Direct layers property with count()
+    if (!layersFound && result.layers && typeof result.layers.count === 'function') {
+      console.log('Trying method 2: result.layers.count()');
+      const layerCount = result.layers.count();
+      info.file_info.layer_count = layerCount;
+      
+      for (let i = 0; i < layerCount; i++) {
+        try {
+          const layer = result.layers.get(i);
+          info.layers.push({
+            name: layer.name || `Layer_${i}`,
+            feature_count: layer.features ? layer.features.count() : 0,
+            raw_data: layer
+          });
+        } catch (e) {
+          console.error(`Error getting layer ${i}:`, e.message);
+        }
+      }
+      layersFound = true;
+    }
+    
+    // Method 3: rootGroup.layers
+    if (!layersFound && result.rootGroup && result.rootGroup.layers) {
+      console.log('Trying method 3: result.rootGroup.layers');
+      const rootLayers = result.rootGroup.layers;
+      if (rootLayers.names && Array.isArray(rootLayers.names)) {
+        info.file_info.layer_count = rootLayers.names.length;
+        for (const layerName of rootLayers.names) {
           try {
-            console.log(`Processing layer ${i + 1}/${layers.length}`);
-            const layerData = layers[i];
-            
-            const layerInfo = {
-              name: layerData.name || `Layer_${i}`,
-              feature_count: layerData.featureCount || 0,
-              fid_column: layerData.fidColumnName || null,
-              geometry_type: 'Unknown',
-              spatial_reference: 'Unknown',
-              extent: null,
-              fields: []
-            };
-
-            // Extract geometry information
-            if (layerData.geometryFields && Array.isArray(layerData.geometryFields) && layerData.geometryFields.length > 0) {
-              const geomField = layerData.geometryFields[0];
-              layerInfo.geometry_field_name = geomField.name || 'Shape';
-              layerInfo.geometry_type = geomField.type || 'Unknown';
-              
-              // Extract spatial reference
-              if (geomField.coordinateSystem) {
-                layerInfo.spatial_reference = JSON.stringify(geomField.coordinateSystem);
-              }
-              
-              // Extract extent
-              if (geomField.extent && Array.isArray(geomField.extent) && geomField.extent.length >= 4) {
-                layerInfo.extent = {
-                  min_x: geomField.extent[0],
-                  min_y: geomField.extent[1],
-                  max_x: geomField.extent[2],
-                  max_y: geomField.extent[3]
-                };
-              }
-            }
-
-            // Extract field information
-            if (layerData.fields && Array.isArray(layerData.fields)) {
-              console.log(`Layer ${layerInfo.name} has ${layerData.fields.length} fields`);
-              
-              for (const field of layerData.fields) {
-                layerInfo.fields.push({
-                  name: field.name || 'Unknown',
-                  type: field.type || 'Unknown',
-                  width: field.width || null,
-                  nullable: field.nullable !== undefined ? field.nullable : null,
-                  unique_constraint: field.uniqueConstraint !== undefined ? field.uniqueConstraint : null,
-                  default_value: field.defaultValue || null,
-                  alias: field.alias || null
-                });
-              }
-            }
-
-            // Note about feature sampling
-            layerInfo.sample_features = [];
-            layerInfo.note = "Feature data access requires direct layer queries - not available in metadata structure";
-
-            info.layers.push(layerInfo);
-            console.log(`Successfully processed layer: ${layerInfo.name} (${layerInfo.feature_count} features, ${layerInfo.fields.length} fields)`);
-            
-          } catch (layerError) {
-            console.error(`Error processing layer ${i}:`, layerError.message);
+            const layer = rootLayers.get(layerName);
             info.layers.push({
-              name: `Layer_${i}_Error`,
-              error: layerError.message,
-              feature_count: 0,
-              geometry_type: 'Error',
-              fields: []
+              name: layerName,
+              feature_count: layer.features ? layer.features.count() : 0,
+              raw_data: layer
             });
+          } catch (e) {
+            console.error(`Error getting layer ${layerName}:`, e.message);
           }
         }
-      } else {
-        console.log('result.datasets[0].layers not found or not an array');
-        console.log('First dataset keys:', Object.keys(firstDataset));
+        layersFound = true;
       }
-    } else {
-      console.log('No datasets array found in result');
-      console.log('Available result keys:', Object.keys(result));
     }
 
-    // Don't close dataset since it's just a result object, not a dataset handle
-    console.log(`Successfully processed ${info.layers.length} layers`);
+    if (!layersFound) {
+      console.log('No layers found through any method. Full result object:');
+      console.log(JSON.stringify(result, null, 2));
+    }
+
+    console.log(`Final result: found ${info.layers.length} layers`);
     return info;
     
   } catch (error) {
