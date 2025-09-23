@@ -47,43 +47,34 @@ app.get('/health', (req, res) => {
 
 // Function to format file path for GDAL
 function formatGDALPath(filePath, originalName) {
-  // If it's a ZIP file, GDAL needs to know the file extension
+  // If it's a ZIP file, use the exact approach from your working version
   if (originalName.toLowerCase().endsWith('.zip')) {
     console.log(`Processing ZIP file: ${originalName}`);
     
-    // Create a symlink or copy with proper extension so GDAL recognizes it
-    const fs = require('fs');
-    const path = require('path');
-    const properPath = filePath + '.zip';
+    // Try the /vsizip/ approach that should work according to GDAL docs
+    const baseName = require('path').basename(originalName, '.zip');
+    const vsiPath = `/vsizip/${filePath}/${baseName}`;
     
-    try {
-      // Copy the temp file to one with .zip extension
-      fs.copyFileSync(filePath, properPath);
-      console.log(`Created copy with ZIP extension: ${properPath}`);
-      return properPath;
-    } catch (error) {
-      console.log(`Failed to create ZIP copy: ${error.message}`);
-      // Fallback to /vsizip/ approach
-      const baseName = path.basename(originalName, '.zip');
-      const gdbPath = `/vsizip/${filePath}/${baseName}`;
-      console.log(`Using /vsizip/ fallback: ${gdbPath}`);
-      return gdbPath;
-    }
+    console.log(`Using /vsizip/ path: ${vsiPath}`);
+    return vsiPath;
   }
   
   return filePath;
 }
 
-// Basic file info function
+// Basic file info function - debug version
 async function getFileInfo(filePath) {
   const gdal = require('gdal-async');
   
+  console.log(`Attempting to open path: ${filePath}`);
+  
   try {
-    console.log(`Attempting to open: ${filePath}`);
     const dataset = gdal.open(filePath);
-    const layerCount = dataset.layers.count();
+    console.log(`GDAL open successful`);
+    console.log(`Dataset driver: ${dataset.description}`);
     
-    console.log(`Successfully opened dataset with ${layerCount} layers`);
+    const layerCount = dataset.layers.count();
+    console.log(`Layer count: ${layerCount}`);
     
     return {
       file_info: {
@@ -93,8 +84,36 @@ async function getFileInfo(filePath) {
       }
     };
   } catch (error) {
-    console.error(`GDAL open failed for path: ${filePath}`);
-    console.error(`Error details: ${error.message}`);
+    console.error(`GDAL open failed for: ${filePath}`);
+    console.error(`GDAL error: ${error.message}`);
+    
+    // Try alternative path formats for debugging
+    if (filePath.includes('/vsizip/')) {
+      const altPath1 = filePath.replace('/UMN.gdb', '/UMN.GDB'); // Try uppercase
+      const altPath2 = filePath.replace('/UMN.gdb', ''); // Try direct ZIP access
+      
+      console.log(`Trying alternative paths:`);
+      console.log(`Alt 1 (uppercase): ${altPath1}`);
+      console.log(`Alt 2 (direct): ${altPath2}`);
+      
+      for (const testPath of [altPath1, altPath2]) {
+        try {
+          const testDataset = gdal.open(testPath);
+          console.log(`SUCCESS with path: ${testPath}`);
+          const testLayerCount = testDataset.layers.count();
+          return {
+            file_info: {
+              type: 'Geospatial',
+              driver: testDataset.description || 'Unknown',
+              layer_count: testLayerCount
+            }
+          };
+        } catch (testError) {
+          console.log(`Failed path: ${testPath} - ${testError.message}`);
+        }
+      }
+    }
+    
     throw new Error(`Failed to read file: ${error.message}`);
   }
 }
