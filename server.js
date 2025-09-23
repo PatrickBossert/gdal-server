@@ -27,10 +27,28 @@ app.get('/health', (req, res) => {
 });
 
 // Function to format file path for GDAL
-function formatGDALPath(filePath, originalName) {
+async function formatGDALPath(filePath, originalName) {
   // If it's a ZIP file, use GDAL's /vsizip/ virtual file system
   if (originalName.toLowerCase().endsWith('.zip')) {
-    return `/vsizip/${filePath}`;
+    const gdal = require('gdal-async');
+    
+    try {
+      // First, try to list contents of the ZIP to find the .gdb directory
+      const zipPath = `/vsizip/${filePath}`;
+      const dataset = await gdal.openAsync(zipPath);
+      
+      // If this works, return the zip path directly
+      return zipPath;
+      
+    } catch (error) {
+      // If direct access fails, we need to find the .gdb directory inside
+      // For now, assume the .gdb has the same name as the ZIP file
+      const baseName = path.basename(originalName, '.zip');
+      const gdbPath = `/vsizip/${filePath}/${baseName}.gdb`;
+      
+      console.log(`Trying GDB path: ${gdbPath}`);
+      return gdbPath;
+    }
   }
   return filePath;
 }
@@ -138,7 +156,7 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
     console.log(`Processing file: ${req.file.originalname}`);
     
     // Use GDAL's native ZIP handling with /vsizip/
-    const gdalPath = formatGDALPath(req.file.path, req.file.originalname);
+    const gdalPath = await formatGDALPath(req.file.path, req.file.originalname);
     console.log(`GDAL path: ${gdalPath}`);
     
     const operation = req.body.operation;
