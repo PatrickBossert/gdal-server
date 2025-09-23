@@ -17,13 +17,32 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
 });
 
-// Health check endpoint
+// Health check endpoint with GDAL driver information
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK',
-    gdal_version: '3.11.4',
-    timestamp: new Date().toISOString()
-  });
+  try {
+    const gdal = require('gdal-async');
+    
+    // Get available drivers
+    const drivers = gdal.drivers.getNames();
+    const hasFileGDB = drivers.includes('OpenFileGDB') || drivers.includes('FileGDB');
+    
+    res.json({ 
+      status: 'OK',
+      gdal_version: '3.11.4',
+      timestamp: new Date().toISOString(),
+      available_drivers: drivers.slice(0, 10), // First 10 drivers
+      total_drivers: drivers.length,
+      has_filegdb: hasFileGDB,
+      filegdb_drivers: drivers.filter(d => d.toLowerCase().includes('gdb'))
+    });
+  } catch (error) {
+    res.json({
+      status: 'OK',
+      gdal_version: '3.11.4',
+      timestamp: new Date().toISOString(),
+      driver_error: error.message
+    });
+  }
 });
 
 // Function to format file path for GDAL
@@ -32,74 +51,12 @@ function formatGDALPath(filePath, originalName) {
   if (originalName.toLowerCase().endsWith('.zip')) {
     console.log(`Processing ZIP file: ${originalName}`);
     
-    const zipPath = `/vsizip/${filePath}`;
+    // For UMN.gdb.zip containing UMN.gdb/ folder, construct the direct path
+    const baseName = require('path').basename(originalName, '.zip');
+    const gdbPath = `/vsizip/${filePath}/${baseName}`;
     
-    // Method 1: Try direct ZIP access first
-    try {
-      console.log(`Trying direct ZIP access: ${zipPath}`);
-      const gdal = require('gdal-async');
-      const dataset = gdal.open(zipPath);
-      dataset.close();
-      console.log(`Direct ZIP access successful: ${zipPath}`);
-      return zipPath;
-    } catch (error) {
-      console.log(`Direct ZIP access failed: ${error.message}`);
-    }
-    
-    // Method 2: Try with original case (UMN.GDB/)
-    const baseNameOriginal = require('path').basename(originalName, '.zip');
-    const originalCasePath = `/vsizip/${filePath}/${baseNameOriginal}`;
-    
-    try {
-      console.log(`Trying original case path: ${originalCasePath}`);
-      const gdal = require('gdal-async');
-      const dataset = gdal.open(originalCasePath);
-      dataset.close();
-      console.log(`Original case path successful: ${originalCasePath}`);
-      return originalCasePath;
-    } catch (error) {
-      console.log(`Original case path failed: ${error.message}`);
-    }
-    
-    // Method 3: Try with .GDB extension (uppercase)
-    let baseNameUpper = baseNameOriginal;
-    if (!baseNameUpper.toUpperCase().endsWith('.GDB')) {
-      baseNameUpper += '.GDB';
-    }
-    const upperCasePath = `/vsizip/${filePath}/${baseNameUpper}`;
-    
-    try {
-      console.log(`Trying uppercase GDB path: ${upperCasePath}`);
-      const gdal = require('gdal-async');
-      const dataset = gdal.open(upperCasePath);
-      dataset.close();
-      console.log(`Uppercase GDB path successful: ${upperCasePath}`);
-      return upperCasePath;
-    } catch (error) {
-      console.log(`Uppercase GDB path failed: ${error.message}`);
-    }
-    
-    // Method 4: Try lowercase version
-    let baseNameLower = baseNameOriginal.toLowerCase();
-    if (!baseNameLower.endsWith('.gdb')) {
-      baseNameLower += '.gdb';
-    }
-    const lowerCasePath = `/vsizip/${filePath}/${baseNameLower}`;
-    
-    try {
-      console.log(`Trying lowercase gdb path: ${lowerCasePath}`);
-      const gdal = require('gdal-async');
-      const dataset = gdal.open(lowerCasePath);
-      dataset.close();
-      console.log(`Lowercase gdb path successful: ${lowerCasePath}`);
-      return lowerCasePath;
-    } catch (error) {
-      console.log(`Lowercase gdb path failed: ${error.message}`);
-    }
-    
-    // If all methods fail, return the most likely path (original case)
-    console.log(`All methods failed, returning original case path: ${originalCasePath}`);
-    return originalCasePath;
+    console.log(`Using GDB path: ${gdbPath}`);
+    return gdbPath;
   }
   
   return filePath;
@@ -110,8 +67,11 @@ async function getFileInfo(filePath) {
   const gdal = require('gdal-async');
   
   try {
-    const dataset = await gdal.openAsync(filePath);
+    console.log(`Attempting to open: ${filePath}`);
+    const dataset = gdal.open(filePath);
     const layerCount = dataset.layers.count();
+    
+    console.log(`Successfully opened dataset with ${layerCount} layers`);
     
     return {
       file_info: {
@@ -121,6 +81,8 @@ async function getFileInfo(filePath) {
       }
     };
   } catch (error) {
+    console.error(`GDAL open failed for path: ${filePath}`);
+    console.error(`Error details: ${error.message}`);
     throw new Error(`Failed to read file: ${error.message}`);
   }
 }
