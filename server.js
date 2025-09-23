@@ -26,6 +26,15 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Function to format file path for GDAL
+function formatGDALPath(filePath, originalName) {
+  // If it's a ZIP file, use GDAL's /vsizip/ virtual file system
+  if (originalName.toLowerCase().endsWith('.zip')) {
+    return `/vsizip/${filePath}`;
+  }
+  return filePath;
+}
+
 // Basic file info function
 async function getFileInfo(filePath) {
   const gdal = require('gdal-async');
@@ -126,22 +135,26 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
     
-    const filePath = req.file.path;
-    const operation = req.body.operation;
+    console.log(`Processing file: ${req.file.originalname}`);
     
+    // Use GDAL's native ZIP handling with /vsizip/
+    const gdalPath = formatGDALPath(req.file.path, req.file.originalname);
+    console.log(`GDAL path: ${gdalPath}`);
+    
+    const operation = req.body.operation;
     let result;
     
     switch (operation) {
       case 'info':
-        result = await getFileInfo(filePath);
+        result = await getFileInfo(gdalPath);
         break;
         
       case 'detailed-info':
-        result = await getDetailedInfo(filePath);
+        result = await getDetailedInfo(gdalPath);
         break;
         
       case 'list-layers':
-        result = await getFileInfo(filePath); // Same as basic info for now
+        result = await getFileInfo(gdalPath);
         break;
         
       case 'extract-layer':
@@ -149,7 +162,7 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
         if (!layerName) {
           return res.status(400).json({ error: 'Layer name required' });
         }
-        result = await extractLayerBasic(filePath, layerName);
+        result = await extractLayerBasic(gdalPath, layerName);
         break;
         
       default:
@@ -157,7 +170,7 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
     }
     
     // Clean up uploaded file
-    fs.unlinkSync(filePath);
+    fs.unlinkSync(req.file.path);
     
     res.json(result);
     
