@@ -30,22 +30,23 @@ app.get('/health', (req, res) => {
 async function formatGDALPath(filePath, originalName) {
   // If it's a ZIP file, use GDAL's /vsizip/ virtual file system
   if (originalName.toLowerCase().endsWith('.zip')) {
-    const gdal = require('gdal-async');
-    
     try {
-      // First, try to list contents of the ZIP to find the .gdb directory
+      // First, try direct ZIP access
       const zipPath = `/vsizip/${filePath}`;
+      const gdal = require('gdal-async');
       const dataset = await gdal.openAsync(zipPath);
-      
-      // If this works, return the zip path directly
       return zipPath;
       
     } catch (error) {
-      // If direct access fails, we need to find the .gdb directory inside
-      // For now, assume the .gdb has the same name as the ZIP file
-      const baseName = path.basename(originalName, '.zip');
-      const gdbPath = `/vsizip/${filePath}/${baseName}.gdb`;
+      // If direct access fails, construct path to .gdb inside ZIP
+      let baseName = path.basename(originalName, '.zip');
       
+      // Handle cases like "name.gdb.zip" - don't add .gdb if already present
+      if (!baseName.toLowerCase().endsWith('.gdb')) {
+        baseName += '.gdb';
+      }
+      
+      const gdbPath = `/vsizip/${filePath}/${baseName}`;
       console.log(`Trying GDB path: ${gdbPath}`);
       return gdbPath;
     }
