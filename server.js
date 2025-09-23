@@ -1,25 +1,28 @@
-// Replace the extractLayerFeatures function in your server.js with this simplified version
+// CORRECT APPROACH - Use ogr2ogr for automatic geometry handling
+// Replace the extractLayerFeatures function in your server.js
 
-const { execSync } = require('child_process');
-const fs = require('fs');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const fs = require('fs').promises;
 const path = require('path');
+
+const execAsync = promisify(exec);
 
 async function extractLayerFeatures(inputPath, layerName, transformCoords = true) {
   try {
     console.log(`Extracting layer: ${layerName} from ${inputPath}`);
     console.log(`Transform coordinates: ${transformCoords}`);
     
-    // Create temporary output path
-    const tempDir = '/tmp';
-    const outputPath = path.join(tempDir, `extracted_${Date.now()}.geojson`);
+    // Create temporary output file
+    const outputPath = `/tmp/extracted_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.geojson`;
     
-    // Build ogr2ogr command using GDAL's built-in transformation
+    // Build ogr2ogr command - this automatically fixes geometry issues
     const cmd = [
       'ogr2ogr',
       '-f', 'GeoJSON',
-      outputPath,
-      inputPath,
-      layerName
+      `"${outputPath}"`,
+      `"${inputPath}"`,
+      `"${layerName}"`
     ];
     
     // Add coordinate transformation if requested
@@ -27,154 +30,68 @@ async function extractLayerFeatures(inputPath, layerName, transformCoords = true
       cmd.push('-t_srs', 'EPSG:4326');
     }
     
-    // Add additional options for better compatibility
-    cmd.push('-lco', 'RFC7946=YES'); // Ensures proper GeoJSON format
-    cmd.push('-skipfailures'); // Skip features with invalid geometry
+    // Add options for robustness
+    cmd.push('-skipfailures');  // Skip invalid geometries
+    cmd.push('-lco', 'RFC7946=YES');  // Standard GeoJSON format
     
-    console.log('Executing command:', cmd.join(' '));
+    const fullCommand = cmd.join(' ');
+    console.log('Executing command:', fullCommand);
     
-    // Execute the command
-    const result = execSync(cmd.join(' '), { 
-      encoding: 'utf8',
-      maxBuffer: 50 * 1024 * 1024 // 50MB buffer for large datasets
+    // Execute ogr2ogr command
+    const { stdout, stderr } = await execAsync(fullCommand, {
+      maxBuffer: 50 * 1024 * 1024  // 50MB buffer
     });
     
-    // Read the generated GeoJSON
-    if (!fs.existsSync(outputPath)) {
-      throw new Error('Output file was not created');
+    if (stderr && !stderr.includes('Warning')) {
+      console.warn('ogr2ogr stderr:', stderr);
     }
     
-    const geojsonData = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+    // Read the generated GeoJSON file
+    const geojsonContent = await fs.readFile(outputPath, 'utf8');
+    const geojsonData = JSON.parse(geojsonContent);
     
     // Clean up temporary file
-    fs.unlinkSync(outputPath);
+    await fs.unlink(outputPath);
     
-    // Extract layer information
+    // Process the results
     const features = geojsonData.features || [];
-    const layerInfo = {
+    
+    const result = {
       name: layerName,
-      geometry_type: features.length > 0 ? features[0].geometry?.type : 'Unknown',
+      geometry_type: features.length > 0 ? features[0]?.geometry?.type : 'Unknown',
       feature_count: features.length,
       coordinate_transformation_applied: transformCoords,
       features: features.map((feature, index) => ({
-        fid: index + 1,
+        fid: feature.id || index + 1,
         geometry_type: feature.geometry?.type,
         coordinates: feature.geometry?.coordinates,
         properties: feature.properties || {},
         geometry: feature.geometry
-      }))
-    };
-    
-    // Add spatial reference information
-    if (transformCoords) {
-      layerInfo.spatial_reference = {
-        transformed: 'EPSG:4326 (WGS84)',
-        original: 'Auto-detected from source'
-      };
-    }
-    
-    // Add extraction summary
-    layerInfo.extraction_summary = {
-      total_extracted: features.length,
-      truncated: false,
-      max_feature_limit: null
-    };
-    
-    console.log(`Successfully extracted ${features.length} features from layer: ${layerName}`);
-    return layerInfo;
-    
-  } catch (error) {
-    console.error('Layer extraction error:', error.message);
-    console.error('Error details:', error);
-    
-    // Provide helpful error information
-    if (error.message.includes('Layer') && error.message.includes('not found')) {
-      throw new Error(`Layer "${layerName}" not found in the dataset. Use "list-layers" or "detailed-info" to see available layers.`);
-    } else if (error.message.includes('ogr2ogr')) {
-      throw new Error(`GDAL processing error: ${error.message}`);
-    } else {
-      throw new Error(`Failed to extract layer: ${error.message}`);
-    }
-  }
-}
-
-// Alternative method using gdal-async library (if you prefer programmatic approach)
-async function extractLayerFeaturesWithGDAL(inputPath, layerName, transformCoords = true) {
-  const gdal = require('gdal-async');
-  
-  try {
-    console.log(`Opening dataset: ${inputPath}`);
-    const dataset = await gdal.openAsync(inputPath);
-    
-    console.log(`Getting layer: ${layerName}`);
-    const layer = dataset.layers.get(layerName);
-    
-    if (!layer) {
-      const availableLayers = dataset.layers.map(l => l.name).join(', ');
-      throw new Error(`Layer "${layerName}" not found. Available layers: ${availableLayers}`);
-    }
-    
-    // Set up coordinate transformation if needed
-    let coordTrans = null;
-    if (transformCoords && layer.srs) {
-      const targetSRS = gdal.SpatialReference.fromEPSG(4326);
-      coordTrans = new gdal.CoordinateTransformation(layer.srs, targetSRS);
-    }
-    
-    const features = [];
-    let featureCount = 0;
-    
-    // Use GDAL's iterator instead of manual coordinate parsing
-    await layer.features.forEachAsync(async (feature) => {
-      try {
-        let geometry = feature.getGeometry();
-        
-        // Transform geometry using GDAL's built-in method
-        if (coordTrans && geometry) {
-          geometry = geometry.clone();
-          geometry.transform(coordTrans);
-        }
-        
-        // Convert to GeoJSON using GDAL's method (eliminates manual parsing)
-        const geoJSONGeometry = geometry ? geometry.toObject() : null;
-        
-        features.push({
-          fid: feature.fid,
-          geometry_type: geoJSONGeometry?.type || 'Unknown',
-          coordinates: geoJSONGeometry?.coordinates,
-          properties: feature.fields.toObject(),
-          geometry: geoJSONGeometry
-        });
-        
-        featureCount++;
-      } catch (featureError) {
-        console.warn(`Skipping feature ${feature.fid}: ${featureError.message}`);
-      }
-    });
-    
-    console.log(`Successfully processed ${featureCount} features`);
-    
-    return {
-      name: layerName,
-      geometry_type: features.length > 0 ? features[0].geometry_type : 'Unknown',
-      feature_count: featureCount,
-      coordinate_transformation_applied: transformCoords,
-      features: features,
+      })),
       spatial_reference: transformCoords ? {
         transformed: 'EPSG:4326 (WGS84)',
-        original: layer.srs ? layer.srs.toWKT() : 'Unknown'
+        original: 'Auto-detected from source'
       } : null,
       extraction_summary: {
-        total_extracted: featureCount,
+        total_extracted: features.length,
         truncated: false,
         max_feature_limit: null
       }
     };
     
+    console.log(`Successfully extracted ${features.length} features from layer: ${layerName}`);
+    return result;
+    
   } catch (error) {
-    console.error('GDAL extraction error:', error);
-    throw error;
+    console.error('Layer extraction error:', error);
+    
+    // Handle specific ogr2ogr errors
+    if (error.message.includes('Layer') && error.message.includes('does not exist')) {
+      throw new Error(`Layer "${layerName}" not found in the dataset.`);
+    } else if (error.message.includes('Unable to open')) {
+      throw new Error(`Cannot open input file: ${inputPath}`);
+    } else {
+      throw new Error(`GDAL extraction failed: ${error.message}`);
+    }
   }
 }
-
-module.exports = { extractLayerFeatures, extractLayerFeaturesWithGDAL };
