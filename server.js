@@ -47,16 +47,13 @@ app.get('/health', (req, res) => {
 
 // Function to format file path for GDAL
 function formatGDALPath(filePath, originalName) {
-  // If it's a ZIP file, use GDAL's /vsizip/ virtual file system
+  // If it's a ZIP file, try different approaches for geodatabase access
   if (originalName.toLowerCase().endsWith('.zip')) {
     console.log(`Processing ZIP file: ${originalName}`);
     
-    // For UMN.gdb.zip containing UMN.gdb/ folder, construct the direct path
-    const baseName = require('path').basename(originalName, '.zip');
-    const gdbPath = `/vsizip/${filePath}/${baseName}`;
-    
-    console.log(`Using GDB path: ${gdbPath}`);
-    return gdbPath;
+    // Method 1: Direct ZIP file access (OpenFileGDB supports this)
+    console.log(`Trying direct ZIP file access: ${filePath}`);
+    return filePath;
   }
   
   return filePath;
