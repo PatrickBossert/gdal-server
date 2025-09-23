@@ -22,17 +22,13 @@ app.use(express.json());
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
+  destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, 'uploads');
-    try {
-      await fs.mkdir(uploadDir, { recursive: true });
-      cb(null, uploadDir);
-    } catch (error) {
-      cb(error);
-    }
+    fs.mkdir(uploadDir, { recursive: true })
+      .then(() => cb(null, uploadDir))
+      .catch(error => cb(error));
   },
   filename: (req, file, cb) => {
-    // Keep original filename with timestamp prefix
     cb(null, Date.now() + '-' + file.originalname);
   }
 });
@@ -79,7 +75,7 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
         break;
       case 'extract-layer':
         const layerName = req.body.layerName;
-        const transformCoords = req.body.transformCoords !== 'false'; // Default to true
+        const transformCoords = req.body.transformCoords !== 'false';
         if (!layerName) {
           return res.status(400).json({ error: 'Layer name is required for extraction' });
         }
@@ -97,7 +93,6 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
   } catch (error) {
     console.error('Processing error:', error);
     
-    // Clean up file if it exists
     if (req.file?.path) {
       try {
         await fs.unlink(req.file.path);
@@ -117,7 +112,6 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
 async function getFileInfo(filePath) {
   const result = await gdal.openAsync(filePath);
   
-  // Use the working method: result.layers.count()
   let layerCount = 0;
   if (result.layers && typeof result.layers.count === 'function') {
     layerCount = result.layers.count();
@@ -137,7 +131,6 @@ async function getFileInfo(filePath) {
   return info;
 }
 
-// Enhanced function to get detailed metadata
 async function getDetailedInfo(gdalPath) {
   try {
     console.log(`Opening dataset: ${gdalPath}`);
@@ -153,7 +146,6 @@ async function getDetailedInfo(gdalPath) {
       layers: []
     };
 
-    // Use the working method: result.layers.count()
     if (result.layers && typeof result.layers.count === 'function') {
       console.log('Using direct layers access method');
       const layerCount = result.layers.count();
@@ -175,7 +167,6 @@ async function getDetailedInfo(gdalPath) {
             fields: []
           };
 
-          // Get geometry type
           try {
             if (layer.geomType) {
               layerInfo.geometry_type = gdal.wkbGeometryType[layer.geomType] || `Type_${layer.geomType}`;
@@ -184,7 +175,6 @@ async function getDetailedInfo(gdalPath) {
             console.warn(`Could not get geometry type for layer ${layer.name}:`, geomError.message);
           }
 
-          // Get feature count
           try {
             if (layer.features && typeof layer.features.count === 'function') {
               layerInfo.feature_count = layer.features.count();
@@ -193,7 +183,6 @@ async function getDetailedInfo(gdalPath) {
             console.warn(`Could not get feature count for layer ${layer.name}:`, countError.message);
           }
 
-          // Get spatial reference
           try {
             if (layer.srs) {
               layerInfo.spatial_reference = layer.srs.toWKT();
@@ -202,7 +191,6 @@ async function getDetailedInfo(gdalPath) {
             console.warn(`Could not get SRS for layer ${layer.name}:`, srsError.message);
           }
 
-          // Get extent
           try {
             if (layer.extent) {
               layerInfo.extent = {
@@ -216,7 +204,6 @@ async function getDetailedInfo(gdalPath) {
             console.warn(`Could not get extent for layer ${layer.name}:`, extentError.message);
           }
 
-          // Get field definitions
           try {
             if (layer.fields) {
               const fieldNames = layer.fields.getNames();
@@ -249,7 +236,6 @@ async function getDetailedInfo(gdalPath) {
             console.warn(`Could not get fields for layer ${layer.name}:`, fieldsError.message);
           }
 
-          // Get sample features (limit to 1 to avoid timeouts)
           layerInfo.sample_features = [];
           try {
             if (layerInfo.feature_count > 0 && layer.features) {
@@ -266,7 +252,6 @@ async function getDetailedInfo(gdalPath) {
                     properties: {}
                   };
 
-                  // Get geometry type for this feature
                   try {
                     const geom = feature.getGeometry();
                     if (geom) {
@@ -276,7 +261,6 @@ async function getDetailedInfo(gdalPath) {
                     console.warn(`Could not get geometry for feature ${feature.fid}`);
                   }
 
-                  // Get feature properties (limit to first 5 fields)
                   const fieldNames = layer.fields?.getNames() || [];
                   const limitedFields = fieldNames.slice(0, 5);
                   
@@ -333,7 +317,6 @@ async function getDetailedInfo(gdalPath) {
   }
 }
 
-// Function to list all layers
 async function listAllLayers(gdalPath) {
   try {
     const result = await gdal.openAsync(gdalPath);
@@ -341,7 +324,6 @@ async function listAllLayers(gdalPath) {
     let layerCount = 0;
     const allLayers = [];
     
-    // Use the working method: result.layers.count()
     if (result.layers && typeof result.layers.count === 'function') {
       layerCount = result.layers.count();
       
@@ -351,12 +333,10 @@ async function listAllLayers(gdalPath) {
           let geometryType = 'Unknown';
           let featureCount = 0;
           
-          // Get geometry type
           if (layer.geomType) {
             geometryType = gdal.wkbGeometryType[layer.geomType] || `Type_${layer.geomType}`;
           }
           
-          // Get feature count
           if (layer.features && typeof layer.features.count === 'function') {
             featureCount = layer.features.count();
           }
@@ -389,14 +369,76 @@ async function listAllLayers(gdalPath) {
   }
 }
 
-// Extract complete layer with coordinate transformation
+async function convertFile(inputPath, outputFormat) {
+  const outputPath = inputPath.replace(path.extname(inputPath), '.converted');
+  
+  const result = await gdal.openAsync(inputPath);
+  
+  let driver;
+  let extension;
+  
+  switch (outputFormat.toUpperCase()) {
+    case 'GEOJSON':
+      driver = gdal.drivers.get('GeoJSON');
+      extension = '.geojson';
+      break;
+    case 'SHAPEFILE':
+      driver = gdal.drivers.get('ESRI Shapefile');
+      extension = '.shp';
+      break;
+    case 'KML':
+      driver = gdal.drivers.get('KML');
+      extension = '.kml';
+      break;
+    default:
+      throw new Error(`Unsupported format: ${outputFormat}`);
+  }
+
+  const finalOutputPath = outputPath + extension;
+  const outputDataset = await driver.createAsync(finalOutputPath);
+
+  if (result.layers && typeof result.layers.count === 'function') {
+    const layerCount = result.layers.count();
+    
+    for (let i = 0; i < layerCount; i++) {
+      const sourceLayer = result.layers.get(i);
+      const outputLayer = await outputDataset.layers.createAsync(
+        sourceLayer.name,
+        sourceLayer.srs,
+        sourceLayer.geomType
+      );
+
+      if (sourceLayer.fields) {
+        const fieldNames = sourceLayer.fields.getNames();
+        for (const fieldName of fieldNames) {
+          const fieldDefn = sourceLayer.fields.get(fieldName);
+          await outputLayer.fields.addAsync(fieldDefn);
+        }
+      }
+
+      await sourceLayer.features.forEachAsync(async (feature) => {
+        await outputLayer.features.addAsync(feature);
+      });
+    }
+  }
+
+  await outputDataset.flushAsync();
+  outputDataset.close();
+
+  const convertedData = await fs.readFile(finalOutputPath, 'utf-8');
+  await fs.unlink(finalOutputPath);
+
+  return {
+    format: outputFormat,
+    data: outputFormat.toUpperCase() === 'GEOJSON' ? JSON.parse(convertedData) : convertedData
+  };
+}
+
 async function extractLayerFeatures(gdalPath, layerName, transformCoords = true) {
-  let result;
   try {
     console.log(`Extracting layer "${layerName}" from: ${gdalPath}`);
-    result = await gdal.openAsync(gdalPath);
+    const result = await gdal.openAsync(gdalPath);
     
-    // Find the specified layer
     if (!result.layers || typeof result.layers.count !== 'function') {
       throw new Error('No layers found in dataset');
     }
@@ -422,11 +464,9 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
     
     console.log(`Found layer "${layerName}" with ${targetLayer.features.count()} features`);
     
-    // Set up coordinate transformation if requested
     let coordTransform = null;
     if (transformCoords && targetLayer.srs) {
       try {
-        // Create target spatial reference (WGS84 - EPSG:4326)
         const targetSrs = gdal.SpatialReference.fromEPSG(4326);
         coordTransform = new gdal.CoordinateTransformation(targetLayer.srs, targetSrs);
         console.log(`Coordinate transformation enabled: ${targetLayer.srs.toProj4()} -> WGS84`);
@@ -436,7 +476,6 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
       }
     }
     
-    // Extract layer information
     const layerInfo = {
       name: layerName,
       feature_count: targetLayer.features.count(),
@@ -450,7 +489,6 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
       features: []
     };
     
-    // Get field definitions
     if (targetLayer.fields) {
       const fieldNames = targetLayer.fields.getNames();
       for (const fieldName of fieldNames) {
@@ -468,10 +506,9 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
       }
     }
     
-    // Extract all features
     console.log('Starting feature extraction...');
     let featureCount = 0;
-    const maxFeatures = 1000; // Reduced limit for stability
+    const maxFeatures = 1000;
     
     await targetLayer.features.forEachAsync(async (feature) => {
       if (featureCount >= maxFeatures) {
@@ -486,11 +523,9 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
           properties: {}
         };
         
-        // Extract geometry with error handling
         try {
           const geometry = feature.getGeometry();
           if (geometry) {
-            // Apply coordinate transformation if configured
             if (coordTransform) {
               try {
                 const transformedGeometry = geometry.clone();
@@ -498,7 +533,6 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
                 featureData.geometry = JSON.parse(transformedGeometry.toJSON());
               } catch (transformError) {
                 console.warn(`Failed to transform geometry for feature ${feature.fid}:`, transformError.message);
-                // Fallback to original geometry
                 featureData.geometry = JSON.parse(geometry.toJSON());
               }
             } else {
@@ -509,7 +543,6 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
           console.warn(`Could not process geometry for feature ${feature.fid}:`, geomError.message);
         }
         
-        // Extract properties with error handling
         if (targetLayer.fields) {
           const fieldNames = targetLayer.fields.getNames();
           for (const fieldName of fieldNames) {
@@ -524,7 +557,6 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
         layerInfo.features.push(featureData);
         featureCount++;
         
-        // Log progress every 50 features for stability
         if (featureCount % 50 === 0) {
           console.log(`Extracted ${featureCount} features...`);
         }
@@ -536,7 +568,6 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
     
     console.log(`Successfully extracted ${featureCount} features from layer "${layerName}"`);
     
-    // Update final count and add summary
     layerInfo.feature_count = featureCount;
     layerInfo.extraction_summary = {
       total_extracted: featureCount,
@@ -551,72 +582,6 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
     console.error('Layer extraction error:', error);
     throw new Error(`Failed to extract layer: ${error.message}`);
   }
-}
-  const outputPath = inputPath.replace(path.extname(inputPath), '.converted');
-  
-  const dataset = await gdal.openAsync(inputPath);
-  
-  let driver;
-  let extension;
-  
-  switch (outputFormat.toUpperCase()) {
-    case 'GEOJSON':
-      driver = gdal.drivers.get('GeoJSON');
-      extension = '.geojson';
-      break;
-    case 'SHAPEFILE':
-      driver = gdal.drivers.get('ESRI Shapefile');
-      extension = '.shp';
-      break;
-    case 'KML':
-      driver = gdal.drivers.get('KML');
-      extension = '.kml';
-      break;
-    default:
-      throw new Error(`Unsupported format: ${outputFormat}`);
-  }
-
-  const finalOutputPath = outputPath + extension;
-  const outputDataset = await driver.createAsync(finalOutputPath);
-
-  // Copy layers
-  for (let i = 0; i < dataset.layers.count(); i++) {
-    const sourceLayer = dataset.layers.get(i);
-    const outputLayer = await outputDataset.layers.createAsync(
-      sourceLayer.name,
-      sourceLayer.srs,
-      sourceLayer.geomType
-    );
-
-    // Copy field definitions
-    const fieldDefns = sourceLayer.fields.getNames().map(name => 
-      sourceLayer.fields.get(name)
-    );
-    
-    for (const fieldDefn of fieldDefns) {
-      await outputLayer.fields.addAsync(fieldDefn);
-    }
-
-    // Copy features
-    await sourceLayer.features.forEachAsync(async (feature) => {
-      await outputLayer.features.addAsync(feature);
-    });
-  }
-
-  await outputDataset.flushAsync();
-  outputDataset.close();
-  dataset.close();
-
-  // Read the converted file and return as string/object
-  const convertedData = await fs.readFile(finalOutputPath, 'utf-8');
-  
-  // Clean up
-  await fs.unlink(finalOutputPath);
-
-  return {
-    format: outputFormat,
-    data: outputFormat.toUpperCase() === 'GEOJSON' ? JSON.parse(convertedData) : convertedData
-  };
 }
 
 app.listen(port, '0.0.0.0', () => {
