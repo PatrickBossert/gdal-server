@@ -47,13 +47,28 @@ app.get('/health', (req, res) => {
 
 // Function to format file path for GDAL
 function formatGDALPath(filePath, originalName) {
-  // If it's a ZIP file, try different approaches for geodatabase access
+  // If it's a ZIP file, GDAL needs to know the file extension
   if (originalName.toLowerCase().endsWith('.zip')) {
     console.log(`Processing ZIP file: ${originalName}`);
     
-    // Method 1: Direct ZIP file access (OpenFileGDB supports this)
-    console.log(`Trying direct ZIP file access: ${filePath}`);
-    return filePath;
+    // Create a symlink or copy with proper extension so GDAL recognizes it
+    const fs = require('fs');
+    const path = require('path');
+    const properPath = filePath + '.zip';
+    
+    try {
+      // Copy the temp file to one with .zip extension
+      fs.copyFileSync(filePath, properPath);
+      console.log(`Created copy with ZIP extension: ${properPath}`);
+      return properPath;
+    } catch (error) {
+      console.log(`Failed to create ZIP copy: ${error.message}`);
+      // Fallback to /vsizip/ approach
+      const baseName = path.basename(originalName, '.zip');
+      const gdbPath = `/vsizip/${filePath}/${baseName}`;
+      console.log(`Using /vsizip/ fallback: ${gdbPath}`);
+      return gdbPath;
+    }
   }
   
   return filePath;
@@ -198,8 +213,11 @@ app.post('/process-geospatial', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'Unknown operation' });
     }
     
-    // Clean up uploaded file
+    // Clean up uploaded file and any copies
     fs.unlinkSync(req.file.path);
+    if (processedPath !== req.file.path && fs.existsSync(processedPath)) {
+      fs.unlinkSync(processedPath);
+    }
     
     res.json(result);
     
