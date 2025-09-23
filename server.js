@@ -391,9 +391,10 @@ async function listAllLayers(gdalPath) {
 
 // Extract complete layer with coordinate transformation
 async function extractLayerFeatures(gdalPath, layerName, transformCoords = true) {
+  let result;
   try {
     console.log(`Extracting layer "${layerName}" from: ${gdalPath}`);
-    const result = await gdal.openAsync(gdalPath);
+    result = await gdal.openAsync(gdalPath);
     
     // Find the specified layer
     if (!result.layers || typeof result.layers.count !== 'function') {
@@ -412,7 +413,11 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
     }
     
     if (!targetLayer) {
-      throw new Error(`Layer "${layerName}" not found. Available layers: ${Array.from({length: layerCount}, (_, i) => result.layers.get(i).name).join(', ')}`);
+      const availableLayers = [];
+      for (let i = 0; i < layerCount; i++) {
+        availableLayers.push(result.layers.get(i).name);
+      }
+      throw new Error(`Layer "${layerName}" not found. Available layers: ${availableLayers.join(', ')}`);
     }
     
     console.log(`Found layer "${layerName}" with ${targetLayer.features.count()} features`);
@@ -466,7 +471,7 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
     // Extract all features
     console.log('Starting feature extraction...');
     let featureCount = 0;
-    const maxFeatures = 10000; // Limit to prevent memory issues
+    const maxFeatures = 1000; // Reduced limit for stability
     
     await targetLayer.features.forEachAsync(async (feature) => {
       if (featureCount >= maxFeatures) {
@@ -481,40 +486,46 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
           properties: {}
         };
         
-        // Extract geometry
-        const geometry = feature.getGeometry();
-        if (geometry) {
-          // Apply coordinate transformation if configured
-          if (coordTransform) {
-            try {
-              const transformedGeometry = geometry.clone();
-              transformedGeometry.transform(coordTransform);
-              featureData.geometry = JSON.parse(transformedGeometry.toJSON());
-            } catch (transformError) {
-              console.warn(`Failed to transform geometry for feature ${feature.fid}:`, transformError.message);
-              // Fallback to original geometry
+        // Extract geometry with error handling
+        try {
+          const geometry = feature.getGeometry();
+          if (geometry) {
+            // Apply coordinate transformation if configured
+            if (coordTransform) {
+              try {
+                const transformedGeometry = geometry.clone();
+                transformedGeometry.transform(coordTransform);
+                featureData.geometry = JSON.parse(transformedGeometry.toJSON());
+              } catch (transformError) {
+                console.warn(`Failed to transform geometry for feature ${feature.fid}:`, transformError.message);
+                // Fallback to original geometry
+                featureData.geometry = JSON.parse(geometry.toJSON());
+              }
+            } else {
               featureData.geometry = JSON.parse(geometry.toJSON());
             }
-          } else {
-            featureData.geometry = JSON.parse(geometry.toJSON());
           }
+        } catch (geomError) {
+          console.warn(`Could not process geometry for feature ${feature.fid}:`, geomError.message);
         }
         
-        // Extract properties
-        const fieldNames = targetLayer.fields?.getNames() || [];
-        for (const fieldName of fieldNames) {
-          try {
-            featureData.properties[fieldName] = feature.fields.get(fieldName);
-          } catch (propError) {
-            featureData.properties[fieldName] = null;
+        // Extract properties with error handling
+        if (targetLayer.fields) {
+          const fieldNames = targetLayer.fields.getNames();
+          for (const fieldName of fieldNames) {
+            try {
+              featureData.properties[fieldName] = feature.fields.get(fieldName);
+            } catch (propError) {
+              featureData.properties[fieldName] = null;
+            }
           }
         }
         
         layerInfo.features.push(featureData);
         featureCount++;
         
-        // Log progress every 100 features
-        if (featureCount % 100 === 0) {
+        // Log progress every 50 features for stability
+        if (featureCount % 50 === 0) {
           console.log(`Extracted ${featureCount} features...`);
         }
         
@@ -525,7 +536,7 @@ async function extractLayerFeatures(gdalPath, layerName, transformCoords = true)
     
     console.log(`Successfully extracted ${featureCount} features from layer "${layerName}"`);
     
-    // Update final count
+    // Update final count and add summary
     layerInfo.feature_count = featureCount;
     layerInfo.extraction_summary = {
       total_extracted: featureCount,
