@@ -30,19 +30,78 @@ app.get('/health', (req, res) => {
 function formatGDALPath(filePath, originalName) {
   // If it's a ZIP file, use GDAL's /vsizip/ virtual file system
   if (originalName.toLowerCase().endsWith('.zip')) {
-    // For GDB ZIP files, construct the correct path to the .gdb directory inside
-    let baseName = path.basename(originalName, '.zip');
+    console.log(`Processing ZIP file: ${originalName}`);
     
-    // Handle cases like "name.gdb.zip" - don't add .gdb if already present
-    if (!baseName.toLowerCase().endsWith('.gdb')) {
-      baseName += '.gdb';
+    const zipPath = `/vsizip/${filePath}`;
+    
+    // Method 1: Try direct ZIP access first
+    try {
+      console.log(`Trying direct ZIP access: ${zipPath}`);
+      const gdal = require('gdal-async');
+      const dataset = gdal.open(zipPath);
+      dataset.close();
+      console.log(`Direct ZIP access successful: ${zipPath}`);
+      return zipPath;
+    } catch (error) {
+      console.log(`Direct ZIP access failed: ${error.message}`);
     }
     
-    // Use correct GDAL /vsizip/ syntax: /vsizip/path/to/file.zip/path/inside/zip
-    const gdbPath = `/vsizip/${filePath}/${baseName}`;
-    console.log(`Using GDAL path: ${gdbPath}`);
-    return gdbPath;
+    // Method 2: Try with original case (UMN.GDB/)
+    const baseNameOriginal = require('path').basename(originalName, '.zip');
+    const originalCasePath = `/vsizip/${filePath}/${baseNameOriginal}`;
+    
+    try {
+      console.log(`Trying original case path: ${originalCasePath}`);
+      const gdal = require('gdal-async');
+      const dataset = gdal.open(originalCasePath);
+      dataset.close();
+      console.log(`Original case path successful: ${originalCasePath}`);
+      return originalCasePath;
+    } catch (error) {
+      console.log(`Original case path failed: ${error.message}`);
+    }
+    
+    // Method 3: Try with .GDB extension (uppercase)
+    let baseNameUpper = baseNameOriginal;
+    if (!baseNameUpper.toUpperCase().endsWith('.GDB')) {
+      baseNameUpper += '.GDB';
+    }
+    const upperCasePath = `/vsizip/${filePath}/${baseNameUpper}`;
+    
+    try {
+      console.log(`Trying uppercase GDB path: ${upperCasePath}`);
+      const gdal = require('gdal-async');
+      const dataset = gdal.open(upperCasePath);
+      dataset.close();
+      console.log(`Uppercase GDB path successful: ${upperCasePath}`);
+      return upperCasePath;
+    } catch (error) {
+      console.log(`Uppercase GDB path failed: ${error.message}`);
+    }
+    
+    // Method 4: Try lowercase version
+    let baseNameLower = baseNameOriginal.toLowerCase();
+    if (!baseNameLower.endsWith('.gdb')) {
+      baseNameLower += '.gdb';
+    }
+    const lowerCasePath = `/vsizip/${filePath}/${baseNameLower}`;
+    
+    try {
+      console.log(`Trying lowercase gdb path: ${lowerCasePath}`);
+      const gdal = require('gdal-async');
+      const dataset = gdal.open(lowerCasePath);
+      dataset.close();
+      console.log(`Lowercase gdb path successful: ${lowerCasePath}`);
+      return lowerCasePath;
+    } catch (error) {
+      console.log(`Lowercase gdb path failed: ${error.message}`);
+    }
+    
+    // If all methods fail, return the most likely path (original case)
+    console.log(`All methods failed, returning original case path: ${originalCasePath}`);
+    return originalCasePath;
   }
+  
   return filePath;
 }
 
