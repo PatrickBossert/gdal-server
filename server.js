@@ -45,21 +45,46 @@ app.get('/health', (req, res) => {
   }
 });
 
-// Function to format file path for GDAL
+// Function to format file path for GDAL - manual extraction approach
 function formatGDALPath(filePath, originalName) {
-  // If it's a ZIP file, use the exact approach from your working version
+  // If it's a ZIP file, extract it manually like the original working server
   if (originalName.toLowerCase().endsWith('.zip')) {
     console.log(`Processing ZIP file: ${originalName}`);
     
-    // Try the /vsizip/ approach that should work according to GDAL docs
-    const baseName = require('path').basename(originalName, '.zip');
-    const vsiPath = `/vsizip/${filePath}/${baseName}`;
+    const { execSync } = require('child_process');
+    const path = require('path');
+    const fs = require('fs');
     
-    console.log(`Using /vsizip/ path: ${vsiPath}`);
-    return vsiPath;
+    try {
+      // Create extraction directory
+      const extractDir = `${filePath}_extracted`;
+      fs.mkdirSync(extractDir, { recursive: true });
+      
+      // Extract ZIP file using unzip command
+      console.log(`Extracting ZIP to: ${extractDir}`);
+      execSync(`unzip -o "${filePath}" -d "${extractDir}"`, { stdio: 'pipe' });
+      
+      // Look for .gdb directory in extracted contents
+      const files = fs.readdirSync(extractDir);
+      console.log(`Extracted files: ${files.join(', ')}`);
+      
+      const gdbDir = files.find(file => file.toLowerCase().endsWith('.gdb'));
+      
+      if (gdbDir) {
+        const gdbPath = path.join(extractDir, gdbDir);
+        console.log(`Found GDB directory: ${gdbPath}`);
+        return { path: gdbPath, extractDir: extractDir };
+      }
+      
+      throw new Error('No .gdb directory found in ZIP file');
+      
+    } catch (error) {
+      console.error(`ZIP extraction failed: ${error.message}`);
+      throw new Error(`Failed to extract ZIP file: ${error.message}`);
+    }
   }
   
-  return filePath;
+  return { path: filePath, extractDir: null };
 }
 
 // Basic file info function - debug version
